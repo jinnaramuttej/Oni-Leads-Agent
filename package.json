@@ -10,6 +10,7 @@
     "build": "pnpm run build:server && pnpm run build:web",
     "import-excel": "pnpm --filter @leads/server import-excel",
     "discover-leads": "pnpm --filter @leads/server discover-leads",
+    "score-websites": "pnpm --filter @leads/server score-websites",
     "typecheck": "pnpm -r typecheck"
   },
   "engines": {

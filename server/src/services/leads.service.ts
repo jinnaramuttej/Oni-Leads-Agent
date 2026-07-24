@@ -102,4 +102,18 @@ export const leadsService = {
     }
     return maxNum;
   },
+
+  /** Queries leads with has_website = true and website_quality = 'unassessed' */
+  async getUnassessedWebLeads(limit = 5): Promise<Lead[]> {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('has_website', true)
+      .eq('website_quality', 'unassessed')
+      .order('created_at', { ascending: true })
+      .limit(limit);
+
+    if (error) throw new Error(error.message);
+    return (data ?? []) as Lead[];
+  },
 };

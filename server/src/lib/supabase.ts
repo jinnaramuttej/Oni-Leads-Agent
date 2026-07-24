@@ -1,4 +1,11 @@
+import path from 'path';
+import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
+
+// Load .env from current working dir or monorepo root
+dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), '../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
