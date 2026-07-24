@@ -111,23 +111,23 @@ export async function scoreWebsites(
   const visionModel = await verifyOllamaVisionModel();
   console.log(`✓ Ollama connection verified. Using vision model: "${visionModel}"\n`);
 
-  // 2. Fetch unassessed leads with websites from Supabase
-  const leads = await leadsService.getUnassessedWebLeads(batchSize);
+  // 2. Query initial total unassessed count
+  const initialTotalCount = await leadsService.getUnassessedWebLeadsCount();
 
   const summary: WebsiteScoringSummary = {
     good: 0,
     average: 0,
     poor: 0,
     broken: 0,
-    totalProcessed: leads.length,
+    totalProcessed: 0,
   };
 
-  if (leads.length === 0) {
+  if (initialTotalCount === 0) {
     console.log('ℹ️ No leads found with has_website = true and website_quality = "unassessed".\n');
     return summary;
   }
 
-  console.log(`🚀 Processing batch of ${leads.length} unassessed website leads...\n`);
+  console.log(`🚀 Found ${initialTotalCount} unassessed website leads. Starting batch processing...\n`);
 
   // Setup screenshot directory
   const screenshotsDir = path.resolve(process.cwd(), 'tmp', 'screenshots');
@@ -144,143 +144,166 @@ export async function scoreWebsites(
   });
 
   try {
-    for (const lead of leads) {
-      if (!lead.website_url) continue;
+    let batchIndex = 1;
 
-      const page = await context.newPage();
-      let loaded = false;
-      let reachabilityError = 'Site unreachable';
-      let hasViewportMeta = false;
-
-      // Clean website URL format
-      let targetUrl = lead.website_url.trim();
-      if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
-        targetUrl = `https://${targetUrl}`;
+    while (true) {
+      const leads = await leadsService.getUnassessedWebLeads(batchSize);
+      if (leads.length === 0) {
+        break;
       }
 
-      try {
-        const response = await page.goto(targetUrl, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
+      for (const lead of leads) {
+        if (!lead.website_url) continue;
 
-        if (response && response.status() < 400) {
-          loaded = true;
-          hasViewportMeta = await page
-            .evaluate(() => Boolean(document.querySelector('meta[name="viewport"]')))
-            .catch(() => false);
-        } else {
-          reachabilityError = response ? `HTTP status ${response.status()}` : 'No response from server';
+        const page = await context.newPage();
+        let loaded = false;
+        let reachabilityError = 'Site unreachable';
+        let hasViewportMeta = false;
+
+        // Clean website URL format
+        let targetUrl = lead.website_url.trim();
+        if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+          targetUrl = `https://${targetUrl}`;
         }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('Timeout') || msg.includes('timeout')) {
-          reachabilityError = 'Timeout after 15s';
-        } else if (msg.includes('ERR_NAME_NOT_RESOLVED') || msg.includes('ENOTFOUND')) {
-          reachabilityError = 'DNS not found';
-        } else if (msg.includes('CERT') || msg.includes('SSL') || msg.includes('ERR_CERT')) {
-          reachabilityError = 'SSL error';
-        } else if (msg.includes('ERR_CONNECTION_REFUSED')) {
-          reachabilityError = 'Connection refused';
-        } else {
-          reachabilityError = 'Site unreachable';
-        }
-      }
 
-      // If site failed to load / unreachable
-      if (!loaded) {
-        await page.close();
-        await leadsService.update(lead.id, {
-          website_quality: 'broken',
-          website_quality_notes: reachabilityError,
-        });
-        summary.broken++;
-        console.log(`Scoring ${lead.lead_number} - ${lead.business_name}... Broken - ${reachabilityError}`);
-        continue;
-      }
-
-      // If site loaded successfully, capture full-page screenshot
-      const screenshotPath = path.join(screenshotsDir, `${lead.lead_number}.png`);
-      try {
-        await page.screenshot({ path: screenshotPath, fullPage: false });
-      } catch {
-        // Fallback to normal viewport screenshot if fullPage fails
-        await page.screenshot({ path: screenshotPath });
-      }
-      await page.close();
-
-      // Read image as Base64 for Ollama
-      const imageBuffer = fs.readFileSync(screenshotPath);
-      const base64Image = imageBuffer.toString('base64');
-
-      // Prompt Ollama Vision Model
-      const prompt =
-        `You are assessing a small local business website for how professional and trustworthy it looks to a potential customer. ` +
-        `Based on this screenshot, rate the website as one of: Good, Average, Poor, Broken. ` +
-        `Consider: does it look outdated or modern? Is it mobile-friendly (viewport tag present: ${hasViewportMeta})? ` +
-        `Does it look actively maintained? Respond in this exact format only:\n` +
-        `Rating: <Good/Average/Poor/Broken>\n` +
-        `Reason: <one short sentence, max 15 words>`;
-
-      const baseUrl = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-      const generateUrl = `${baseUrl.replace(/\/+$/, '')}/api/generate`;
-
-      const ollamaRes = await fetch(generateUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: visionModel,
-          prompt,
-          images: [base64Image],
-          stream: false,
-        }),
-      });
-
-      if (!ollamaRes.ok) {
-        const errBody = await ollamaRes.text();
-        throw new Error(`Ollama generation failed with status ${ollamaRes.status}: ${errBody}`);
-      }
-
-      const ollamaData = (await ollamaRes.json()) as { response?: string };
-      const responseText = ollamaData.response || '';
-
-      // Parse Rating & Reason from Ollama text output
-      let quality: WebsiteQuality = 'average';
-      let notes = 'Assessed via vision model';
-
-      const ratingMatch = responseText.match(/Rating:\s*(Good|Average|Poor|Broken)/i);
-      if (ratingMatch) {
-        const matched = ratingMatch[1].toLowerCase();
-        if (matched === 'good' || matched === 'average' || matched === 'poor' || matched === 'broken') {
-          quality = matched;
-        }
-      }
-
-      const reasonMatch = responseText.match(/Reason:\s*(.+)/i);
-      if (reasonMatch) {
-        notes = reasonMatch[1].trim();
-      } else if (responseText.trim()) {
-        notes = responseText.trim().split('\n')[0].substring(0, 100);
-      }
-
-      // Update Supabase lead record
-      await leadsService.update(lead.id, {
-        website_quality: quality,
-        website_quality_notes: notes,
-      });
-
-      summary[quality]++;
-
-      const capitalizedQuality = quality.charAt(0).toUpperCase() + quality.slice(1);
-      console.log(`Scoring ${lead.lead_number} - ${lead.business_name}... ${capitalizedQuality} - ${notes}`);
-
-      // Delete screenshot unless --keep-screenshots flag was supplied
-      if (!keepScreenshots && fs.existsSync(screenshotPath)) {
         try {
-          fs.unlinkSync(screenshotPath);
-        } catch {
-          // ignore cleanup errors
+          const response = await page.goto(targetUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          });
+
+          if (response && response.status() < 400) {
+            loaded = true;
+            hasViewportMeta = await page
+              .evaluate(() => Boolean(document.querySelector('meta[name="viewport"]')))
+              .catch(() => false);
+          } else {
+            reachabilityError = response ? `HTTP status ${response.status()}` : 'No response from server';
+          }
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes('Timeout') || msg.includes('timeout')) {
+            reachabilityError = 'Timeout after 15s';
+          } else if (msg.includes('ERR_NAME_NOT_RESOLVED') || msg.includes('ENOTFOUND')) {
+            reachabilityError = 'DNS not found';
+          } else if (msg.includes('CERT') || msg.includes('SSL') || msg.includes('ERR_CERT')) {
+            reachabilityError = 'SSL error';
+          } else if (msg.includes('ERR_CONNECTION_REFUSED')) {
+            reachabilityError = 'Connection refused';
+          } else {
+            reachabilityError = 'Site unreachable';
+          }
         }
+
+        // If site failed to load / unreachable
+        if (!loaded) {
+          await page.close();
+          await leadsService.update(lead.id, {
+            website_quality: 'broken',
+            website_quality_notes: reachabilityError,
+          });
+          summary.broken++;
+          summary.totalProcessed++;
+          console.log(`Scoring ${lead.lead_number} - ${lead.business_name}... Broken - ${reachabilityError}`);
+          continue;
+        }
+
+        // If site loaded successfully, capture full-page screenshot
+        const screenshotPath = path.join(screenshotsDir, `${lead.lead_number}.png`);
+        try {
+          await page.screenshot({ path: screenshotPath, fullPage: false });
+        } catch {
+          // Fallback to normal viewport screenshot if fullPage fails
+          await page.screenshot({ path: screenshotPath });
+        }
+        await page.close();
+
+        // Read image as Base64 for Ollama
+        const imageBuffer = fs.readFileSync(screenshotPath);
+        const base64Image = imageBuffer.toString('base64');
+
+        // Prompt Ollama Vision Model
+        const prompt =
+          `You are assessing a small local business website for how professional and trustworthy it looks to a potential customer. ` +
+          `Based on this screenshot, rate the website as one of: Good, Average, Poor, Broken. ` +
+          `Consider: does it look outdated or modern? Is it mobile-friendly (viewport tag present: ${hasViewportMeta})? ` +
+          `Does it look actively maintained? Respond in this exact format only:\n` +
+          `Rating: <Good/Average/Poor/Broken>\n` +
+          `Reason: <one short sentence, max 15 words>`;
+
+        const baseUrl = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+        const generateUrl = `${baseUrl.replace(/\/+$/, '')}/api/generate`;
+
+        const ollamaRes = await fetch(generateUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: visionModel,
+            prompt,
+            images: [base64Image],
+            stream: false,
+          }),
+        });
+
+        if (!ollamaRes.ok) {
+          const errBody = await ollamaRes.text();
+          throw new Error(`Ollama generation failed with status ${ollamaRes.status}: ${errBody}`);
+        }
+
+        const ollamaData = (await ollamaRes.json()) as { response?: string };
+        const responseText = ollamaData.response || '';
+
+        // Parse Rating & Reason from Ollama text output
+        let quality: WebsiteQuality = 'average';
+        let notes = 'Assessed via vision model';
+
+        const ratingMatch = responseText.match(/Rating:\s*(Good|Average|Poor|Broken)/i);
+        if (ratingMatch) {
+          const matched = ratingMatch[1].toLowerCase();
+          if (matched === 'good' || matched === 'average' || matched === 'poor' || matched === 'broken') {
+            quality = matched;
+          }
+        }
+
+        const reasonMatch = responseText.match(/Reason:\s*(.+)/i);
+        if (reasonMatch) {
+          notes = reasonMatch[1].trim();
+        } else if (responseText.trim()) {
+          notes = responseText.trim().split('\n')[0].substring(0, 100);
+        }
+
+        // Update Supabase lead record
+        await leadsService.update(lead.id, {
+          website_quality: quality,
+          website_quality_notes: notes,
+        });
+
+        summary[quality]++;
+        summary.totalProcessed++;
+
+        const capitalizedQuality = quality.charAt(0).toUpperCase() + quality.slice(1);
+        console.log(`Scoring ${lead.lead_number} - ${lead.business_name}... ${capitalizedQuality} - ${notes}`);
+
+        // Delete screenshot unless --keep-screenshots flag was supplied
+        if (!keepScreenshots && fs.existsSync(screenshotPath)) {
+          try {
+            fs.unlinkSync(screenshotPath);
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+      }
+
+      console.log(`\n📦 Batch ${batchIndex} complete — ${summary.totalProcessed}/${initialTotalCount} processed so far\n`);
+
+      // Query Supabase again for remaining unassessed leads
+      const remainingCount = await leadsService.getUnassessedWebLeadsCount();
+      if (remainingCount > 0) {
+        // Small delay (2.5 seconds) between batches to avoid hammering Ollama/Playwright back-to-back
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        batchIndex++;
+      } else {
+        break;
       }
     }
   } finally {

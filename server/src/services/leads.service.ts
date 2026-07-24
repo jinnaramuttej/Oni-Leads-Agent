@@ -116,4 +116,16 @@ export const leadsService = {
     if (error) throw new Error(error.message);
     return (data ?? []) as Lead[];
   },
+
+  /** Queries total count of leads with has_website = true and website_quality = 'unassessed' */
+  async getUnassessedWebLeadsCount(): Promise<number> {
+    const { count, error } = await supabase
+      .from('leads')
+      .select('*', { count: 'exact', head: true })
+      .eq('has_website', true)
+      .eq('website_quality', 'unassessed');
+
+    if (error) throw new Error(error.message);
+    return count ?? 0;
+  },
 };
