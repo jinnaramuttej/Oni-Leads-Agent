@@ -1,0 +1,18 @@
+{
+  "name": "leads-agent",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev:web": "pnpm --filter @leads/web dev",
+    "dev:server": "pnpm --filter @leads/server dev",
+    "build:web": "pnpm --filter @leads/web build",
+    "build:server": "pnpm --filter @leads/server build",
+    "build": "pnpm run build:server && pnpm run build:web",
+    "import-excel": "pnpm --filter @leads/server import-excel",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  }
+}

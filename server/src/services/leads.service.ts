@@ -1,0 +1,80 @@
+import { supabase } from '../lib/supabase';
+import type { Lead, UpdateLeadInput } from '@leads/shared';
+
+interface ListOptions {
+  page: number;
+  limit: number;
+}
+
+interface ListResult {
+  leads: Lead[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export const leadsService = {
+  async list({ page, limit }: ListOptions): Promise<ListResult> {
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+
+    const { data, error, count } = await supabase
+      .from('leads')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (error) throw new Error(error.message);
+
+    return {
+      leads: (data ?? []) as Lead[],
+      total: count ?? 0,
+      page,
+      limit,
+    };
+  },
+
+  async getById(id: string): Promise<Lead | null> {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) return null;
+    return data as Lead;
+  },
+
+  async upsertByPlaceId(input: Omit<Lead, 'id' | 'lead_number' | 'created_at' | 'updated_at'>): Promise<Lead> {
+    const { data, error } = await supabase
+      .from('leads')
+      .upsert(input, { onConflict: 'place_id', ignoreDuplicates: true })
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    return data as Lead;
+  },
+
+  async update(id: string, patch: UpdateLeadInput): Promise<Lead> {
+    const { data, error } = await supabase
+      .from('leads')
+      .update(patch)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    return data as Lead;
+  },
+
+  /** Returns the set of existing place_ids — used for deduplication during discovery */
+  async getExistingPlaceIds(): Promise<Set<string>> {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('place_id');
+
+    if (error) throw new Error(error.message);
+    return new Set((data ?? []).map((r: { place_id: string }) => r.place_id));
+  },
+};
