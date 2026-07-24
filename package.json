@@ -11,6 +11,9 @@
     "import-excel": "pnpm --filter @leads/server import-excel",
     "discover-leads": "pnpm --filter @leads/server discover-leads",
     "score-websites": "pnpm --filter @leads/server score-websites",
+    "n8n:up": "docker compose -f n8n/docker-compose.yml up -d",
+    "n8n:down": "docker compose -f n8n/docker-compose.yml down",
+    "n8n:logs": "docker compose -f n8n/docker-compose.yml logs -f",
     "typecheck": "pnpm -r typecheck"
   },
   "engines": {
