@@ -9,6 +9,7 @@
     "build:server": "pnpm --filter @leads/server build",
     "build": "pnpm run build:server && pnpm run build:web",
     "import-excel": "pnpm --filter @leads/server import-excel",
+    "discover-leads": "pnpm --filter @leads/server discover-leads",
     "typecheck": "pnpm -r typecheck"
   },
   "engines": {

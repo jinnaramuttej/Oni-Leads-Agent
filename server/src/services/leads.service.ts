@@ -72,9 +72,34 @@ export const leadsService = {
   async getExistingPlaceIds(): Promise<Set<string>> {
     const { data, error } = await supabase
       .from('leads')
-      .select('place_id');
+      .select('place_id')
+      .not('place_id', 'is', null);
 
     if (error) throw new Error(error.message);
-    return new Set((data ?? []).map((r: { place_id: string }) => r.place_id));
+    return new Set((data ?? []).map((r: { place_id: string | null }) => r.place_id!).filter(Boolean));
+  },
+
+  /** Finds the maximum integer from lead_number (e.g. "L4045" -> 4045) */
+  async getMaxLeadNumber(): Promise<number> {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('lead_number')
+      .not('lead_number', 'is', null);
+
+    if (error) throw new Error(error.message);
+
+    let maxNum = 0;
+    for (const row of data ?? []) {
+      if (row.lead_number && typeof row.lead_number === 'string') {
+        const match = row.lead_number.match(/L?(\d+)/i);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num > maxNum) {
+            maxNum = num;
+          }
+        }
+      }
+    }
+    return maxNum;
   },
 };
