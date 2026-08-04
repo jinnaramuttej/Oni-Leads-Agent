@@ -22,8 +22,15 @@ export async function fetchNextLeadAction(skipIds: string[] = []) {
 
     if (countError) throw countError;
 
+    const { count: totalSentCount, error: totalSentError } = await supabase
+      .from("leads")
+      .select("*", { count: "exact", head: true })
+      .eq("lead_status", "contacted");
+
+    if (totalSentError) throw totalSentError;
+
     if (count === 0) {
-      return { lead: null, remaining: 0 };
+      return { lead: null, remaining: 0, totalSent: totalSentCount || 0 };
     }
 
     // 2. Fetch one lead
@@ -43,7 +50,7 @@ export async function fetchNextLeadAction(skipIds: string[] = []) {
     const { data, error: leadError } = await query;
     if (leadError) throw leadError;
 
-    return { lead: data && data.length > 0 ? data[0] : null, remaining: count };
+    return { lead: data && data.length > 0 ? data[0] : null, remaining: count, totalSent: totalSentCount || 0 };
   } catch (err: any) {
     console.error(err);
     throw new Error(err.message || "Failed to fetch lead data");

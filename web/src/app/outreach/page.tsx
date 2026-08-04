@@ -317,6 +317,9 @@ export default function OutreachDashboard() {
     try {
       const data = await fetchNextLeadAction(skipIds);
       setRemaining(data.remaining);
+      if (data.totalSent !== undefined) {
+        setTotalSent(data.totalSent);
+      }
       if (data.lead) {
         setLead(data.lead as Lead);
         setStatus("ready");
